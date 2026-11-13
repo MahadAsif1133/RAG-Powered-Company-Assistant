@@ -53,6 +53,12 @@
 │   ├── .env.example
 │   ├── supabase/functions/
 │   │   └── match_document_chunks.sql
+│   ├── evaluation/           # RAGAS evaluation suite (optional)
+│   │   ├── dataset/
+│   │   │   └── eval_questions.json
+│   │   ├── build_dataset.py
+│   │   ├── run_ragas.py
+│   │   └── results/          # git-ignored output
 │   └── app/
 │       ├── core/             # config, supabase client
 │       ├── api/              # routes + deps
@@ -231,6 +237,49 @@ Frontend will be available at `http://localhost:3000`
 | GET | `/api/documents/{id}/status` | Admin JWT | Poll ingestion status |
 | DELETE | `/api/documents/{id}` | Admin JWT | Delete doc + chunks |
 | POST | `/api/query` | User JWT | Ask a question (RAG) |
+
+---
+
+## Evaluation (RAGAS)
+
+The project includes a [RAGAS](https://docs.ragas.io/)-based evaluation suite that measures retrieval and generation quality **without changing any application behavior**. It lives in `backend/evaluation/` and is installed as an optional dependency group so the production Docker image stays lean.
+
+### Metrics
+
+| Metric | What it measures |
+|--------|-----------------|
+| **Faithfulness** | Is the generated answer grounded in the retrieved contexts? |
+| **Response Relevancy** | Does the answer directly address the user's question? |
+| **Context Precision** | Are the most relevant chunks ranked highest? |
+| **Context Recall** | Did the retriever fetch all the information needed to answer? |
+
+### Quick Start
+
+```bash
+cd backend
+
+# 1. Install eval dependencies (in addition to the main app deps)
+uv pip install -e ".[eval]"
+
+# 2. Make sure backend/.env has GROQ_API_KEY, VOYAGE_API_KEY, and EVAL_ORG_ID set
+#    EVAL_ORG_ID should be the UUID of an org that already has documents indexed.
+
+# 3. Build the evaluation dataset (runs each question through the real pipeline)
+python -m evaluation.build_dataset
+#    → outputs: evaluation/results/eval_dataset.json
+
+# 4. Run RAGAS metrics
+python -m evaluation.run_ragas
+#    → outputs: evaluation/results/ragas_scores.json
+#               evaluation/results/ragas_scores.csv
+```
+
+### Notes
+
+- The `eval` dependency group includes `ragas`, `langchain-groq`, and `langchain-voyageai`. These are **not** installed in the Railway Docker image.
+- **Groq free-tier rate limits**: `build_dataset.py` pauses between queries (configurable via `EVAL_QUERY_DELAY` env var, default 6 s). `run_ragas.py` uses `RunConfig(max_workers=2, max_retries=10)` to stay within limits.
+- The 10 sample questions in `evaluation/dataset/eval_questions.json` are **placeholder data** — replace them with real questions and ground-truth answers from your organisation's uploaded documents for meaningful results.
+- `evaluation/results/` is git-ignored; results are generated locally and may contain org-specific data.
 
 ---
 
