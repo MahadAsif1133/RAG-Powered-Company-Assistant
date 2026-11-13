@@ -1,0 +1,43 @@
+[
+  {
+    "_comment": "SAMPLE DATA — replace with real questions from your organisation's uploaded HR/SOP documents.",
+    "question": "What is the company's policy on remote work?",
+    "ground_truth": "Employees may work remotely up to 3 days per week with manager approval. A remote-work agreement must be signed and filed with HR before the arrangement begins."
+  },
+  {
+    "question": "How many days of paid time off do new employees receive?",
+    "ground_truth": "New full-time employees receive 15 days of paid time off (PTO) per year, accrued on a monthly basis starting from their hire date."
+  },
+  {
+    "question": "What is the process for requesting parental leave?",
+    "ground_truth": "Employees must submit a parental leave request to HR at least 30 days before the expected leave date. The company offers 12 weeks of paid parental leave for primary caregivers and 4 weeks for secondary caregivers."
+  },
+  {
+    "question": "What are the steps in the employee onboarding process?",
+    "ground_truth": "Onboarding includes: 1) IT account setup on day one, 2) HR orientation session covering benefits and policies, 3) team introduction with the assigned buddy, 4) completion of mandatory compliance training within the first two weeks."
+  },
+  {
+    "question": "How does the company handle workplace harassment complaints?",
+    "ground_truth": "Employees should report harassment to their manager, HR, or the anonymous ethics hotline. HR will initiate an investigation within 48 hours. The company enforces a strict zero-tolerance policy, and retaliation against reporters is prohibited."
+  },
+  {
+    "question": "What is the reimbursement policy for professional development?",
+    "ground_truth": "The company reimburses up to $2,000 per year for approved professional development activities including courses, certifications, and conferences. Employees must obtain manager pre-approval and submit receipts within 30 days."
+  },
+  {
+    "question": "What are the standard working hours and overtime policy?",
+    "ground_truth": "Standard working hours are 9 AM to 5 PM, Monday through Friday. Non-exempt employees receive 1.5x pay for hours worked beyond 40 per week. Overtime must be pre-approved by the employee's direct manager."
+  },
+  {
+    "question": "How do employees enroll in the health insurance plan?",
+    "ground_truth": "Employees can enroll in the health insurance plan during their first 30 days of employment or during the annual open enrollment period in November. The company covers 80% of premiums for individual plans and 60% for family plans."
+  },
+  {
+    "question": "What is the company's data security and acceptable use policy?",
+    "ground_truth": "All employees must use company-approved devices and VPN for accessing internal systems. Sharing credentials is prohibited. Sensitive data must be encrypted at rest and in transit. Violations may result in disciplinary action up to termination."
+  },
+  {
+    "question": "What is the procedure for submitting expense reports?",
+    "ground_truth": "Expense reports must be submitted through the internal expense portal within 14 days of incurring the expense. Receipts are required for all expenses over $25. Manager approval is needed before reimbursement is processed, typically within 5 business days."
+  }
+]
