@@ -8,3 +8,6 @@ backend\.env
 frontend\.env.local
 venv/
 .venv/
+
+# Evaluation results (generated, may contain org-specific data)
+backend/evaluation/results/
