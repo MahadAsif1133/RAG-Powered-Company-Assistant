@@ -107,18 +107,18 @@ flowchart TD
 | Layer | Technology |
 |-------|-----------|
 | Backend | Python 3.11+, FastAPI, uvicorn |
-| Database | Supabase (Postgres 15 + pgvector) |
-| Auth | Supabase Auth (email/password) |
-| Embeddings | Voyage AI `voyage-3-large` (1024-dim) |
-| LLM | Groq (official `groq` SDK; model set via `GROQ_MODEL`), optional Anthropic path via `LLM_PROVIDER=anthropic` |
-| Document Parsing & Ingestion | LlamaIndex (`llama-index-core`, `llama-index-readers-file`) with fallback to `unstructured` + `pypdf` + `python-docx` |
-| Caching & Rate Limiting | Redis (`redis` + `slowapi`, optional via `REDIS_URL`; in-memory fallback) |
-| File Storage | Optional AWS S3 (`boto3`, `organizations/{org_id}/...` prefix via `STORAGE_BACKEND=s3`) |
-| MCP | Official `mcp` Python SDK (`python -m app.mcp_server`, scoped by `MCP_ORG_ID`) |
+| Database | Supabase (Postgres 15 + pgvector HNSW) |
+| Auth | Supabase Auth (Bearer JWT + `users` table role lookup) |
+| Embeddings | Hugging Face `Qwen/Qwen3-Embedding-8B` (`huggingface_hub` InferenceClient, 1024-dim MRL) / Voyage AI `voyage-3-large` (1024-dim) / OpenAI `text-embedding-3-small` fallback |
+| LLM | Groq (official `groq` SDK; model configured via `GROQ_MODEL`), optional Anthropic path via `LLM_PROVIDER=anthropic` |
+| Document Parsing & Ingestion | LlamaIndex (`llama-index-core`, `llama-index-readers-file`, `SentenceSplitter`) with automatic fallback to `unstructured` + `pypdf` + `python-docx` |
+| Caching & Rate Limiting | Redis (`redis` for per-org query caching + per-org rate limiting via `REDIS_URL`; `slowapi` in-memory per-IP fallback) |
+| File Storage | Optional AWS S3 (`boto3`, `organizations/{org_id}/...` prefix via `STORAGE_BACKEND=s3`; default `supabase` mode does not archive raw files) |
+| MCP | Official `mcp` Python SDK (`python -m app.mcp_server`, read-only tools scoped by `MCP_ORG_ID`) |
 | Frontend | Next.js 14 (App Router), TypeScript, Tailwind CSS |
 | Charts | recharts |
-| Slack | Slack Bolt SDK (Socket Mode) |
-| Backend hosting | Railway or Ubuntu EC2 with Docker Compose (see [`DEPLOYMENT.md`](DEPLOYMENT.md)) |
+| Slack | Slack Bolt SDK (Socket Mode, optional) |
+| Backend hosting | Railway (`Dockerfile` + `railway.toml`) or Ubuntu EC2 with Docker Compose (see [`DEPLOYMENT.md`](DEPLOYMENT.md)) |
 | Frontend hosting | Vercel |
 
 ---
@@ -347,12 +347,14 @@ python -m evaluation.run_ragas
 
 ## Key Design Decisions
 
-- **LlamaIndex for ingestion only**: `app/services/ingestion.py` uses LlamaIndex readers (PDF, DOCX), an `IngestionPipeline` with `SentenceSplitter` for node parsing/chunking (sized to match the old 2000-char / 200-overlap chunks), and per-node metadata (`org_id`, `document_id`, source filename). Embeddings (Voyage), pgvector storage, the `match_document_chunks` function and retrieval are still written directly and do not use LlamaIndex, and the stored chunk format is unchanged. If LlamaIndex fails for a file, the original parser + chunker run instead (`INGESTION_PIPELINE=legacy` forces the old path). Why: maintained readers and splitters instead of our own; nothing else was moved so retrieval behavior stays identical
+- **LlamaIndex for ingestion only**: `app/services/ingestion.py` uses LlamaIndex readers (PDF, DOCX), an `IngestionPipeline` with `SentenceSplitter` for node parsing/chunking (sized to match the old 2000-char / 200-overlap chunks), and per-node metadata (`org_id`, `document_id`, source filename). Embeddings, pgvector storage, the `match_document_chunks` function and retrieval are still written directly and do not use LlamaIndex, and the stored chunk format is unchanged. If LlamaIndex fails for a file, the original parser + chunker run instead (`INGESTION_PIPELINE=legacy` forces the old path). Why: maintained readers and splitters instead of our own; nothing else was moved so retrieval behavior stays identical
 - **pgvector HNSW**: no training step, online inserts, excellent recall at < 1M chunks
-- **Voyage AI embeddings**: consistently outperforms OpenAI on retrieval benchmarks; swappable via env var
-- **Groq LLM behind a small provider layer**: `app/services/llm.py` keeps one `generate_answer()` signature; Groq is the default (free tier, official SDK) and Anthropic stays as an optional path. Rate limits are retried with exponential backoff (honoring `Retry-After`), then the user gets a clear 429/503 message
-- **Strict prompt**: the system prompt explicitly forbids hallucination and instructs the model to punt to HR/IT when context is insufficient
-- **Multi-tenant from day 1**: every table scoped by `org_id`; RLS enforced; service-role key used only server-side
+- **Flexible 1024-dim embeddings (Qwen / Voyage AI / OpenAI)**: `app/services/embedder.py` supports `Qwen/Qwen3-Embedding-8B` via Hugging Face `InferenceClient` (sliced and L2-normalized to 1024 dimensions to match the schema) and automatically falls back to Voyage AI `voyage-3-large` (1024-dim) or OpenAI `text-embedding-3-small` if configured
+- **Groq LLM behind a small provider layer**: `app/services/llm.py` keeps one `generate_answer()` signature; Groq is the default (free tier, official `groq` SDK, model set via `GROQ_MODEL`) and Anthropic stays as an optional path (`LLM_PROVIDER=anthropic`). Rate limits are retried with exponential backoff (honoring `Retry-After`), then the user gets a clear 429/503 message
+- **Strict anti-hallucination prompt**: the system prompt explicitly forbids outside knowledge and instructs the model to punt to HR/IT (`was_answered_confidently=false`) when retrieved context is insufficient
+- **Optional Redis caching & per-org rate limiting**: when `REDIS_URL` is set, answers are cached under `rag:{org_id}:v{docver}:q:{sha256}` and automatically invalidated by bumping `docver` on document upload/delete, and requests are rate-limited per organization (`rl:{org_id}:...`); when `REDIS_URL` is unset, the app falls back to no cache and `slowapi`'s in-memory per-IP limiter
+- **Optional S3 archival & standalone MCP server**: `STORAGE_BACKEND=s3` archives raw uploaded files to S3 under `organizations/{org_id}/...` via `boto3`'s standard credential chain, and `python -m app.mcp_server` exposes read-only tools (`search_knowledge_base`, `list_sources`) pinned to a single tenant via `MCP_ORG_ID`
+- **Multi-tenant from day 1**: every database table, Redis key, S3 object prefix, and MCP query is scoped by `org_id`; RLS is enforced in Postgres and the service-role key is used only server-side
 
 ---
 
