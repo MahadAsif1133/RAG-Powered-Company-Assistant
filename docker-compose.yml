@@ -1,4 +1,15 @@
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: ./backend
@@ -9,8 +20,12 @@ services:
         required: false  # lets 'docker compose config' work before you create .env
     environment:
       PORT: "8000"
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     ports:
       - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test:
@@ -22,3 +37,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+volumes:
+  redis_data:

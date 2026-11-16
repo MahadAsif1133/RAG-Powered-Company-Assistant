@@ -197,6 +197,8 @@ Frontend will be available at `http://localhost:3000`
 | `SLACK_SIGNING_SECRET` | ❌ | Required for Slack bot only |
 | `SLACK_APP_TOKEN` | ❌ | Required for Slack bot Socket Mode |
 | `QUERY_RATE_LIMIT` | ❌ | Defaults to `10/minute` |
+| `REDIS_URL` | ❌ | Optional Redis URL for per-org query caching and per-org rate limiting (falls back to in-memory if unset) |
+| `CACHE_TTL_SECONDS` | ❌ | Redis query cache TTL in seconds (default `3600`) |
 | `MAX_RETRIEVED_CHUNKS` | ❌ | Defaults to `5` |
 | `CORS_ORIGINS` | ❌ | Comma-separated allowed origins |
 

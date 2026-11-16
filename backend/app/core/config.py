@@ -38,10 +38,12 @@ class Settings(BaseSettings):
     # "llamaindex" (default; falls back to legacy automatically on any error) or "legacy"
     ingestion_pipeline: str = "llamaindex"
 
-    # ── Rate Limiting ───────────────────────────────────────────
+    # ── Rate Limiting & Caching (Redis optional) ────────────────
     query_rate_limit: str = "10/minute"
     max_retrieved_chunks: int = 5
     similarity_threshold: float = 0.3
+    redis_url: str = ""  # if unset, caching + Redis rate limiting are disabled
+    cache_ttl_seconds: int = 3600
 
     # ── App Config ──────────────────────────────────────────────
     environment: str = "development"

@@ -12,7 +12,9 @@ from slowapi.util import get_remote_address
 from app.api.deps import UserDep
 from app.core.config import settings
 from app.core.supabase_client import get_supabase
+from app.services.cache import get_cached_answer, set_cached_answer
 from app.services.llm import LLMRateLimitError, LLMUnavailableError, generate_answer
+from app.services.ratelimit import check_org_rate_limit
 from app.services.retriever import retrieve_chunks
 
 logger = logging.getLogger(__name__)
@@ -81,6 +83,36 @@ async def query(
 
     start_ms = int(time.time() * 1000)
 
+    # Optional per-organization Redis rate limit (no-op when REDIS_URL is unset)
+    allowed, retry_after = check_org_rate_limit(current_user.org_id)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Organization query rate limit exceeded. Please wait before asking again.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    # Optional Redis answer cache (org-scoped, invalidated on document changes)
+    cached = get_cached_answer(current_user.org_id, question)
+    if cached is not None:
+        latency_ms = int(time.time() * 1000) - start_ms
+        sources = [SourceDocument(**s) for s in cached.get("sources", [])]
+        _log_query(
+            org_id=current_user.org_id,
+            user_id=current_user.user_id,
+            question=question,
+            answer=cached["answer"],
+            chunk_ids=[],
+            was_confident=bool(cached.get("was_confident", True)),
+            latency_ms=latency_ms,
+        )
+        return QueryResponse(
+            answer=cached["answer"],
+            sources=sources,
+            was_answered_confidently=bool(cached.get("was_confident", True)),
+            latency_ms=latency_ms,
+        )
+
     # Step 1 & 2: Retrieve relevant chunks
     logger.info("RAG query from user=%s org=%s", current_user.user_id, current_user.org_id)
     chunks = retrieve_chunks(question=question, org_id=current_user.org_id)
@@ -117,9 +149,18 @@ async def query(
                 document_id=chunk.document_id,
             )
 
+    sources_list = list(seen_docs.values())
+    set_cached_answer(
+        org_id=current_user.org_id,
+        question=question,
+        answer=answer,
+        sources=[s.model_dump() for s in sources_list],
+        was_confident=was_confident,
+    )
+
     return QueryResponse(
         answer=answer,
-        sources=list(seen_docs.values()),
+        sources=sources_list,
         was_answered_confidently=was_confident,
         latency_ms=latency_ms,
     )

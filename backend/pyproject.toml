@@ -29,8 +29,9 @@ dependencies = [
     "llama-index-readers-file>=0.4.0",
     "docx2txt>=0.8",          # required by LlamaIndex DocxReader
 
-    # Rate limiting
+    # Rate limiting & caching
     "slowapi>=0.1.9",
+    "redis>=5.0.0",
 
     # Config & utilities
     "pydantic-settings>=2.3.0",

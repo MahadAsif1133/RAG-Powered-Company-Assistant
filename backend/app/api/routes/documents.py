@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from app.api.deps import AdminDep, UserDep
 from app.core.supabase_client import get_supabase
+from app.services.cache import invalidate_org_cache
 from app.services.embedder import embed_texts
 from app.services.ingestion import ingest_chunks
 from app.services.parser import SUPPORTED_TYPES
@@ -181,6 +182,7 @@ async def delete_document(document_id: str, current_user: AdminDep) -> None:
         raise HTTPException(status_code=404, detail="Document not found.")
 
     supabase.table("documents").delete().eq("id", document_id).execute()
+    invalidate_org_cache(current_user.org_id)
     logger.info("Deleted document %s (org=%s)", document_id, current_user.org_id)
 
 
@@ -237,6 +239,7 @@ async def _ingest_document(
         supabase.table("documents").update(
             {"status": "ready", "chunk_count": len(chunks)}
         ).eq("id", document_id).execute()
+        invalidate_org_cache(org_id)
 
         logger.info("[Ingest %s] Complete — %d chunks indexed", document_id, len(chunks))
 
