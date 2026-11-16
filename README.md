@@ -190,6 +190,7 @@ Frontend will be available at `http://localhost:3000`
 | `GROQ_MODEL` | ✅ | Groq model name — no default in code; pick one from [Groq's current model list](https://console.groq.com/docs/models) |
 | `LLM_MAX_RETRIES` | ❌ | Retries with backoff on Groq rate limits (default `3`) |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | ❌ | Only if `LLM_PROVIDER=anthropic` |
+| `INGESTION_PIPELINE` | ❌ | `llamaindex` (default, auto-fallback) or `legacy` |
 | `SIMILARITY_THRESHOLD` | ❌ | Minimum cosine similarity for retrieval (default `0.3`) |
 | `EMBEDDING_DIMENSION` | ❌ | `1024` (Voyage) or `1536` (OpenAI) |
 | `SLACK_BOT_TOKEN` | ❌ | Required for Slack bot only |
@@ -309,7 +310,7 @@ python -m evaluation.run_ragas
 
 ## Key Design Decisions
 
-- **No LangChain/LlamaIndex**: chunking, embedding, and retrieval are written directly for debuggability and easy client demos
+- **LlamaIndex for ingestion only**: `app/services/ingestion.py` uses LlamaIndex readers (PDF, DOCX), an `IngestionPipeline` with `SentenceSplitter` for node parsing/chunking (sized to match the old 2000-char / 200-overlap chunks), and per-node metadata (`org_id`, `document_id`, source filename). Embeddings (Voyage), pgvector storage, the `match_document_chunks` function and retrieval are still written directly and do not use LlamaIndex, and the stored chunk format is unchanged. If LlamaIndex fails for a file, the original parser + chunker run instead (`INGESTION_PIPELINE=legacy` forces the old path). Why: maintained readers and splitters instead of our own; nothing else was moved so retrieval behavior stays identical
 - **pgvector HNSW**: no training step, online inserts, excellent recall at < 1M chunks
 - **Voyage AI embeddings**: consistently outperforms OpenAI on retrieval benchmarks; swappable via env var
 - **Groq LLM behind a small provider layer**: `app/services/llm.py` keeps one `generate_answer()` signature; Groq is the default (free tier, official SDK) and Anthropic stays as an optional path. Rate limits are retried with exponential backoff (honoring `Retry-After`), then the user gets a clear 429/503 message

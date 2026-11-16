@@ -13,9 +13,9 @@ from pydantic import BaseModel
 
 from app.api.deps import AdminDep, UserDep
 from app.core.supabase_client import get_supabase
-from app.services.chunker import chunk_text
 from app.services.embedder import embed_texts
-from app.services.parser import parse_document, SUPPORTED_TYPES
+from app.services.ingestion import ingest_chunks
+from app.services.parser import SUPPORTED_TYPES
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/documents", tags=["Documents"])
@@ -200,14 +200,13 @@ async def _ingest_document(
     supabase = get_supabase()
 
     try:
-        logger.info("[Ingest %s] Parsing document", document_id)
-        text = parse_document(content, filename)
-
-        if not text or len(text.strip()) < 10:
-            raise ValueError("Parsed document produced no usable text.")
-
-        logger.info("[Ingest %s] Chunking (%d chars)", document_id, len(text))
-        chunks = chunk_text(text)
+        logger.info("[Ingest %s] Reading + chunking document", document_id)
+        # LlamaIndex pipeline (falls back to the legacy parser/chunker on any failure).
+        # Runs in a thread: parsing is CPU-bound and must not block the event loop.
+        ingested = await asyncio.get_event_loop().run_in_executor(
+            None, ingest_chunks, content, filename, org_id, document_id
+        )
+        chunks = [c.text for c in ingested]
 
         if not chunks:
             raise ValueError("Chunker produced no chunks.")

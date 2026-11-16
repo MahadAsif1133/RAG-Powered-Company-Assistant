@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = ""  # only used when LLM_PROVIDER=anthropic
 
+    # ── Ingestion ───────────────────────────────────────────────
+    # "llamaindex" (default; falls back to legacy automatically on any error) or "legacy"
+    ingestion_pipeline: str = "llamaindex"
+
     # ── Rate Limiting ───────────────────────────────────────────
     query_rate_limit: str = "10/minute"
     max_retrieved_chunks: int = 5
