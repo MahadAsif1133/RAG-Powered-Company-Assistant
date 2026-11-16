@@ -17,6 +17,7 @@ from app.services.cache import invalidate_org_cache
 from app.services.embedder import embed_texts
 from app.services.ingestion import ingest_chunks
 from app.services.parser import SUPPORTED_TYPES
+from app.services.storage import delete_document_file, store_document_file
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/documents", tags=["Documents"])
@@ -116,6 +117,7 @@ async def upload_document(
         content=content,
         filename=file.filename or safe_filename,
         original_name=file.filename or safe_filename,
+        storage_filename=unique_filename,
     )
 
     return UploadResponse(
@@ -172,7 +174,7 @@ async def delete_document(document_id: str, current_user: AdminDep) -> None:
     # Verify document belongs to this org
     check = (
         supabase.table("documents")
-        .select("id")
+        .select("id, filename")
         .eq("id", document_id)
         .eq("org_id", current_user.org_id)
         .single()
@@ -182,6 +184,8 @@ async def delete_document(document_id: str, current_user: AdminDep) -> None:
         raise HTTPException(status_code=404, detail="Document not found.")
 
     supabase.table("documents").delete().eq("id", document_id).execute()
+    if check.data.get("filename"):
+        delete_document_file(current_user.org_id, check.data["filename"])
     invalidate_org_cache(current_user.org_id)
     logger.info("Deleted document %s (org=%s)", document_id, current_user.org_id)
 
@@ -194,14 +198,24 @@ async def _ingest_document(
     content: bytes,
     filename: str,
     original_name: str,
+    storage_filename: str | None = None,
 ) -> None:
     """
-    Background task: parse → chunk → embed → store to document_chunks.
+    Background task: (optional S3 upload) → parse → chunk → embed → store to document_chunks.
     Updates document status to 'ready' on success or 'failed' on error.
     """
     supabase = get_supabase()
 
     try:
+        # Optional S3 archival of the raw file under organizations/{org_id}/...
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            store_document_file,
+            org_id,
+            storage_filename or filename,
+            content,
+        )
+
         logger.info("[Ingest %s] Reading + chunking document", document_id)
         # LlamaIndex pipeline (falls back to the legacy parser/chunker on any failure).
         # Runs in a thread: parsing is CPU-bound and must not block the event loop.

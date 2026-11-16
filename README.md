@@ -6,35 +6,59 @@
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Clients                              │
-│   Next.js Dashboard (Vercel)    Slack Bot (Socket Mode)     │
-└──────────────────┬──────────────────────┬───────────────────┘
-                   │  HTTPS               │  Slack Events
-                   ▼                      ▼
-┌─────────────────────────────────────────────────────────────┐
-│               FastAPI Backend (Railway)                      │
-│  ┌───────────┐  ┌──────────────┐  ┌──────────────────────┐ │
-│  │ /documents│  │    /query    │  │    Slack Bolt Bot    │ │
-│  │  (admin)  │  │  (RAG pipe)  │  │  (/ask, @mention)   │ │
-│  └─────┬─────┘  └──────┬───────┘  └──────────┬───────────┘ │
-│        │               │                      │             │
-│  ┌─────▼───────────────▼──────────────────────▼──────────┐ │
-│  │  Services: parser → chunker → embedder → retriever → llm│ │
-│  └────────────────────────┬──────────────────────────────┘ │
-└───────────────────────────┼─────────────────────────────────┘
-                            │
-                ┌───────────▼───────────┐
-                │   Supabase (Postgres) │
-                │   + pgvector HNSW     │
-                │   + Supabase Auth     │
-                └───────────────────────┘
-                            │
-          ┌─────────────────┼──────────────────┐
-          ▼                 ▼                  ▼
-    Voyage AI          Anthropic          Supabase Storage
-   (embeddings)    (Claude Sonnet)       (file uploads)
+```mermaid
+flowchart TD
+    subgraph Clients["Clients"]
+        FE["Next.js 14 Dashboard (Vercel)"]
+        Slack["Slack Bot (Socket Mode, optional)"]
+        MCPClient["MCP Client (Claude Desktop / Cursor)"]
+    end
+
+    subgraph Backend["Backend (Railway or Ubuntu EC2 + Docker Compose)"]
+        API["FastAPI App (main:app)"]
+        DocsRoute["/api/documents (Admin)"]
+        QueryRoute["/api/query (User)"]
+        HealthRoute["/health"]
+        Ingest["LlamaIndex Ingestion Pipeline (with legacy fallback)"]
+        Retriever["Retriever + Embedder"]
+        LLMService["LLM Provider Layer (Groq default / Anthropic optional)"]
+        CacheRL["Redis Cache & Per-Org Rate Limiter (optional)"]
+        StorageSvc["Storage Service (default no-op / optional AWS S3)"]
+        MCPServer["Standalone MCP Server (app.mcp_server, scoped to MCP_ORG_ID)"]
+    end
+
+    subgraph External["Data & AI Services"]
+        Supabase["Supabase (Postgres 15 + pgvector HNSW + Auth + RLS)"]
+        Redis[("Redis 7 (optional)")]
+        Voyage["Voyage AI (voyage-3-large 1024-dim)"]
+        Groq["Groq API (Chat Completions)"]
+        S3[("AWS S3 Bucket: organizations/{org_id}/... (optional)")]
+    end
+
+    FE -->|HTTPS + JWT| API
+    Slack -->|Slack Events| API
+    MCPClient -->|stdio| MCPServer
+
+    API --> DocsRoute
+    API --> QueryRoute
+    API --> HealthRoute
+
+    DocsRoute --> Ingest
+    DocsRoute --> StorageSvc
+    StorageSvc -->|STORAGE_BACKEND=s3| S3
+    Ingest --> Retriever
+
+    QueryRoute --> CacheRL
+    CacheRL -->|REDIS_URL| Redis
+    QueryRoute --> Retriever
+    QueryRoute --> LLMService
+
+    MCPServer --> Retriever
+    MCPServer -->|list_sources| Supabase
+
+    Retriever -->|embed| Voyage
+    Retriever -->|match_document_chunks RPC| Supabase
+    LLMService -->|GROQ_MODEL| Groq
 ```
 
 ---
@@ -87,11 +111,14 @@
 | Auth | Supabase Auth (email/password) |
 | Embeddings | Voyage AI `voyage-3-large` (1024-dim) |
 | LLM | Groq (official `groq` SDK; model set via `GROQ_MODEL`), optional Anthropic path via `LLM_PROVIDER=anthropic` |
-| Document Parsing | `unstructured` + `pypdf` + `python-docx` |
+| Document Parsing & Ingestion | LlamaIndex (`llama-index-core`, `llama-index-readers-file`) with fallback to `unstructured` + `pypdf` + `python-docx` |
+| Caching & Rate Limiting | Redis (`redis` + `slowapi`, optional via `REDIS_URL`; in-memory fallback) |
+| File Storage | Optional AWS S3 (`boto3`, `organizations/{org_id}/...` prefix via `STORAGE_BACKEND=s3`) |
+| MCP | Official `mcp` Python SDK (`python -m app.mcp_server`, scoped by `MCP_ORG_ID`) |
 | Frontend | Next.js 14 (App Router), TypeScript, Tailwind CSS |
 | Charts | recharts |
 | Slack | Slack Bolt SDK (Socket Mode) |
-| Backend hosting | Railway |
+| Backend hosting | Railway or Ubuntu EC2 with Docker Compose (see [`DEPLOYMENT.md`](DEPLOYMENT.md)) |
 | Frontend hosting | Vercel |
 
 ---
@@ -202,6 +229,9 @@ Frontend will be available at `http://localhost:3000`
 | `MAX_RETRIEVED_CHUNKS` | ❌ | Defaults to `5` |
 | `CORS_ORIGINS` | ❌ | Comma-separated allowed origins |
 | `MCP_ORG_ID` | ❌ | Organization UUID when running the standalone MCP server (`python -m app.mcp_server`) |
+| `STORAGE_BACKEND` | ❌ | `supabase` (default no-op archival, existing behavior) or `s3` (stores raw files in S3 under `organizations/{org_id}/...`) |
+| `S3_BUCKET_NAME` | ❌ | S3 bucket name when `STORAGE_BACKEND=s3` |
+| `AWS_REGION` | ❌ | AWS region for `boto3` when `STORAGE_BACKEND=s3` (credentials come from the standard AWS chain / EC2 IAM role) |
 
 *One of `VOYAGE_API_KEY` or `OPENAI_API_KEY` is required.
 
@@ -252,6 +282,10 @@ The image (`backend/Dockerfile`) uses a multi-stage build (uv installs from `pyp
 3. Set **Root Directory** to `frontend/`
 4. Add environment variables from `frontend/.env.example`
 5. Deploy
+
+### Backend → Ubuntu EC2 (Docker Compose + Caddy/Nginx + Optional S3)
+
+See [`DEPLOYMENT.md`](DEPLOYMENT.md) for the complete Linux/EC2 deployment guide (billing alert, least-privilege S3 IAM role, Docker installation, `docker compose` stack, HTTPS with Caddy or Nginx, and stopping the instance).
 
 ---
 

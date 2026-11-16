@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     # ── MCP Server (optional, separate entry point) ─────────────
     mcp_org_id: str = ""
 
+    # ── File Storage (optional S3; default "supabase" as today) ─
+    storage_backend: str = "supabase"  # "supabase" (default) or "s3"
+    s3_bucket_name: str = ""
+    aws_region: str = ""
+
     @property
     def cors_origins_list(self) -> List[str]:
         return [o.strip() for o in self.cors_origins.split(",")]
