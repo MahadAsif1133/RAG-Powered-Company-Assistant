@@ -13,9 +13,11 @@ from pydantic import BaseModel
 
 from app.api.deps import AdminDep, UserDep
 from app.core.supabase_client import get_supabase
-from app.services.chunker import chunk_text
+from app.services.cache import invalidate_org_cache
 from app.services.embedder import embed_texts
-from app.services.parser import parse_document, SUPPORTED_TYPES
+from app.services.ingestion import ingest_chunks
+from app.services.parser import SUPPORTED_TYPES
+from app.services.storage import delete_document_file, store_document_file
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/documents", tags=["Documents"])
@@ -115,6 +117,7 @@ async def upload_document(
         content=content,
         filename=file.filename or safe_filename,
         original_name=file.filename or safe_filename,
+        storage_filename=unique_filename,
     )
 
     return UploadResponse(
@@ -171,7 +174,7 @@ async def delete_document(document_id: str, current_user: AdminDep) -> None:
     # Verify document belongs to this org
     check = (
         supabase.table("documents")
-        .select("id")
+        .select("id, filename")
         .eq("id", document_id)
         .eq("org_id", current_user.org_id)
         .single()
@@ -181,6 +184,9 @@ async def delete_document(document_id: str, current_user: AdminDep) -> None:
         raise HTTPException(status_code=404, detail="Document not found.")
 
     supabase.table("documents").delete().eq("id", document_id).execute()
+    if check.data.get("filename"):
+        delete_document_file(current_user.org_id, check.data["filename"])
+    invalidate_org_cache(current_user.org_id)
     logger.info("Deleted document %s (org=%s)", document_id, current_user.org_id)
 
 
@@ -192,22 +198,31 @@ async def _ingest_document(
     content: bytes,
     filename: str,
     original_name: str,
+    storage_filename: str | None = None,
 ) -> None:
     """
-    Background task: parse → chunk → embed → store to document_chunks.
+    Background task: (optional S3 upload) → parse → chunk → embed → store to document_chunks.
     Updates document status to 'ready' on success or 'failed' on error.
     """
     supabase = get_supabase()
 
     try:
-        logger.info("[Ingest %s] Parsing document", document_id)
-        text = parse_document(content, filename)
+        # Optional S3 archival of the raw file under organizations/{org_id}/...
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            store_document_file,
+            org_id,
+            storage_filename or filename,
+            content,
+        )
 
-        if not text or len(text.strip()) < 10:
-            raise ValueError("Parsed document produced no usable text.")
-
-        logger.info("[Ingest %s] Chunking (%d chars)", document_id, len(text))
-        chunks = chunk_text(text)
+        logger.info("[Ingest %s] Reading + chunking document", document_id)
+        # LlamaIndex pipeline (falls back to the legacy parser/chunker on any failure).
+        # Runs in a thread: parsing is CPU-bound and must not block the event loop.
+        ingested = await asyncio.get_event_loop().run_in_executor(
+            None, ingest_chunks, content, filename, org_id, document_id
+        )
+        chunks = [c.text for c in ingested]
 
         if not chunks:
             raise ValueError("Chunker produced no chunks.")
@@ -238,6 +253,7 @@ async def _ingest_document(
         supabase.table("documents").update(
             {"status": "ready", "chunk_count": len(chunks)}
         ).eq("id", document_id).execute()
+        invalidate_org_cache(org_id)
 
         logger.info("[Ingest %s] Complete — %d chunks indexed", document_id, len(chunks))
 

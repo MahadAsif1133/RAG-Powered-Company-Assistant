@@ -6,35 +6,59 @@
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Clients                              │
-│   Next.js Dashboard (Vercel)    Slack Bot (Socket Mode)     │
-└──────────────────┬──────────────────────┬───────────────────┘
-                   │  HTTPS               │  Slack Events
-                   ▼                      ▼
-┌─────────────────────────────────────────────────────────────┐
-│               FastAPI Backend (Railway)                      │
-│  ┌───────────┐  ┌──────────────┐  ┌──────────────────────┐ │
-│  │ /documents│  │    /query    │  │    Slack Bolt Bot    │ │
-│  │  (admin)  │  │  (RAG pipe)  │  │  (/ask, @mention)   │ │
-│  └─────┬─────┘  └──────┬───────┘  └──────────┬───────────┘ │
-│        │               │                      │             │
-│  ┌─────▼───────────────▼──────────────────────▼──────────┐ │
-│  │  Services: parser → chunker → embedder → retriever → llm│ │
-│  └────────────────────────┬──────────────────────────────┘ │
-└───────────────────────────┼─────────────────────────────────┘
-                            │
-                ┌───────────▼───────────┐
-                │   Supabase (Postgres) │
-                │   + pgvector HNSW     │
-                │   + Supabase Auth     │
-                └───────────────────────┘
-                            │
-          ┌─────────────────┼──────────────────┐
-          ▼                 ▼                  ▼
-    Voyage AI          Anthropic          Supabase Storage
-   (embeddings)    (Claude Sonnet)       (file uploads)
+```mermaid
+flowchart TD
+    subgraph Clients["Clients"]
+        FE["Next.js 14 Dashboard (Vercel)"]
+        Slack["Slack Bot (Socket Mode, optional)"]
+        MCPClient["MCP Client (Claude Desktop / Cursor)"]
+    end
+
+    subgraph Backend["Backend (Railway or Ubuntu EC2 + Docker Compose)"]
+        API["FastAPI App (main:app)"]
+        DocsRoute["/api/documents (Admin)"]
+        QueryRoute["/api/query (User)"]
+        HealthRoute["/health"]
+        Ingest["LlamaIndex Ingestion Pipeline (with legacy fallback)"]
+        Retriever["Retriever + Embedder"]
+        LLMService["LLM Provider Layer (Groq default / Anthropic optional)"]
+        CacheRL["Redis Cache & Per-Org Rate Limiter (optional)"]
+        StorageSvc["Storage Service (default no-op / optional AWS S3)"]
+        MCPServer["Standalone MCP Server (app.mcp_server, scoped to MCP_ORG_ID)"]
+    end
+
+    subgraph External["Data & AI Services"]
+        Supabase["Supabase (Postgres 15 + pgvector HNSW + Auth + RLS)"]
+        Redis[("Redis 7 (optional)")]
+        Voyage["Voyage AI (voyage-3-large 1024-dim)"]
+        Groq["Groq API (Chat Completions)"]
+        S3[("AWS S3 Bucket: organizations/{org_id}/... (optional)")]
+    end
+
+    FE -->|HTTPS + JWT| API
+    Slack -->|Slack Events| API
+    MCPClient -->|stdio| MCPServer
+
+    API --> DocsRoute
+    API --> QueryRoute
+    API --> HealthRoute
+
+    DocsRoute --> Ingest
+    DocsRoute --> StorageSvc
+    StorageSvc -->|STORAGE_BACKEND=s3| S3
+    Ingest --> Retriever
+
+    QueryRoute --> CacheRL
+    CacheRL -->|REDIS_URL| Redis
+    QueryRoute --> Retriever
+    QueryRoute --> LLMService
+
+    MCPServer --> Retriever
+    MCPServer -->|list_sources| Supabase
+
+    Retriever -->|embed| Voyage
+    Retriever -->|match_document_chunks RPC| Supabase
+    LLMService -->|GROQ_MODEL| Groq
 ```
 
 ---
@@ -86,12 +110,15 @@
 | Database | Supabase (Postgres 15 + pgvector) |
 | Auth | Supabase Auth (email/password) |
 | Embeddings | Voyage AI `voyage-3-large` (1024-dim) |
-| LLM | Anthropic Claude (claude-sonnet-4-5) |
-| Document Parsing | `unstructured` + `pypdf` + `python-docx` |
+| LLM | Groq (official `groq` SDK; model set via `GROQ_MODEL`), optional Anthropic path via `LLM_PROVIDER=anthropic` |
+| Document Parsing & Ingestion | LlamaIndex (`llama-index-core`, `llama-index-readers-file`) with fallback to `unstructured` + `pypdf` + `python-docx` |
+| Caching & Rate Limiting | Redis (`redis` + `slowapi`, optional via `REDIS_URL`; in-memory fallback) |
+| File Storage | Optional AWS S3 (`boto3`, `organizations/{org_id}/...` prefix via `STORAGE_BACKEND=s3`) |
+| MCP | Official `mcp` Python SDK (`python -m app.mcp_server`, scoped by `MCP_ORG_ID`) |
 | Frontend | Next.js 14 (App Router), TypeScript, Tailwind CSS |
 | Charts | recharts |
 | Slack | Slack Bolt SDK (Socket Mode) |
-| Backend hosting | Railway |
+| Backend hosting | Railway or Ubuntu EC2 with Docker Compose (see [`DEPLOYMENT.md`](DEPLOYMENT.md)) |
 | Frontend hosting | Vercel |
 
 ---
@@ -102,7 +129,7 @@
 - Node.js 18+
 - A [Supabase](https://supabase.com) project (free tier works)
 - A [Voyage AI](https://www.voyageai.com) API key **or** OpenAI API key
-- An [Anthropic](https://console.anthropic.com) API key
+- A [Groq](https://console.groq.com) API key (free tier works; check Groq's current model list for `GROQ_MODEL`)
 - A [Slack App](https://api.slack.com/apps) (for Milestone 5 only)
 
 ---
@@ -185,15 +212,26 @@ Frontend will be available at `http://localhost:3000`
 | `SUPABASE_ANON_KEY` | ✅ | Public anon key |
 | `VOYAGE_API_KEY` | ✅* | Voyage AI key for embeddings |
 | `OPENAI_API_KEY` | ✅* | OpenAI key (fallback if no Voyage key) |
-| `ANTHROPIC_API_KEY` | ✅ | Anthropic Claude key |
-| `CLAUDE_MODEL` | ❌ | Defaults to `claude-sonnet-4-5` |
+| `LLM_PROVIDER` | ❌ | `groq` (default) or `anthropic` |
+| `GROQ_API_KEY` | ✅ | Groq API key |
+| `GROQ_MODEL` | ✅ | Groq model name — no default in code; pick one from [Groq's current model list](https://console.groq.com/docs/models) |
+| `LLM_MAX_RETRIES` | ❌ | Retries with backoff on Groq rate limits (default `3`) |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | ❌ | Only if `LLM_PROVIDER=anthropic` |
+| `INGESTION_PIPELINE` | ❌ | `llamaindex` (default, auto-fallback) or `legacy` |
+| `SIMILARITY_THRESHOLD` | ❌ | Minimum cosine similarity for retrieval (default `0.3`) |
 | `EMBEDDING_DIMENSION` | ❌ | `1024` (Voyage) or `1536` (OpenAI) |
 | `SLACK_BOT_TOKEN` | ❌ | Required for Slack bot only |
 | `SLACK_SIGNING_SECRET` | ❌ | Required for Slack bot only |
 | `SLACK_APP_TOKEN` | ❌ | Required for Slack bot Socket Mode |
 | `QUERY_RATE_LIMIT` | ❌ | Defaults to `10/minute` |
+| `REDIS_URL` | ❌ | Optional Redis URL for per-org query caching and per-org rate limiting (falls back to in-memory if unset) |
+| `CACHE_TTL_SECONDS` | ❌ | Redis query cache TTL in seconds (default `3600`) |
 | `MAX_RETRIEVED_CHUNKS` | ❌ | Defaults to `5` |
 | `CORS_ORIGINS` | ❌ | Comma-separated allowed origins |
+| `MCP_ORG_ID` | ❌ | Organization UUID when running the standalone MCP server (`python -m app.mcp_server`) |
+| `STORAGE_BACKEND` | ❌ | `supabase` (default no-op archival, existing behavior) or `s3` (stores raw files in S3 under `organizations/{org_id}/...`) |
+| `S3_BUCKET_NAME` | ❌ | S3 bucket name when `STORAGE_BACKEND=s3` |
+| `AWS_REGION` | ❌ | AWS region for `boto3` when `STORAGE_BACKEND=s3` (credentials come from the standard AWS chain / EC2 IAM role) |
 
 *One of `VOYAGE_API_KEY` or `OPENAI_API_KEY` is required.
 
@@ -206,6 +244,26 @@ Frontend will be available at `http://localhost:3000`
 | `NEXT_PUBLIC_BACKEND_URL` | ✅ | Backend URL (local: `http://localhost:8000`) |
 
 ---
+
+## Run with Docker
+
+```bash
+# 1. Create backend/.env from the template and fill in your own values
+cp backend/.env.example backend/.env
+
+# 2. Build and start the backend (http://localhost:8000)
+docker compose up --build -d
+
+# 3. Check it
+curl http://localhost:8000/health
+docker compose ps          # STATUS should become "healthy"
+docker compose logs -f backend
+
+# Stop
+docker compose down
+```
+
+The image (`backend/Dockerfile`) uses a multi-stage build (uv installs from `pyproject.toml`, dependency files copied first for layer caching), runs as a non-root user, installs only the system packages the document parsers need, has a `HEALTHCHECK` on `/health`, and honors the `PORT` variable (Railway sets it; default 8000). `docker compose config` works even before `backend/.env` exists, but the app needs real keys to answer questions.
 
 ## Deployment
 
@@ -224,6 +282,10 @@ Frontend will be available at `http://localhost:3000`
 3. Set **Root Directory** to `frontend/`
 4. Add environment variables from `frontend/.env.example`
 5. Deploy
+
+### Backend → Ubuntu EC2 (Docker Compose + Caddy/Nginx + Optional S3)
+
+See [`DEPLOYMENT.md`](DEPLOYMENT.md) for the complete Linux/EC2 deployment guide (billing alert, least-privilege S3 IAM role, Docker installation, `docker compose` stack, HTTPS with Caddy or Nginx, and stopping the instance).
 
 ---
 
@@ -285,10 +347,11 @@ python -m evaluation.run_ragas
 
 ## Key Design Decisions
 
-- **No LangChain/LlamaIndex**: chunking, embedding, and retrieval are written directly for debuggability and easy client demos
+- **LlamaIndex for ingestion only**: `app/services/ingestion.py` uses LlamaIndex readers (PDF, DOCX), an `IngestionPipeline` with `SentenceSplitter` for node parsing/chunking (sized to match the old 2000-char / 200-overlap chunks), and per-node metadata (`org_id`, `document_id`, source filename). Embeddings (Voyage), pgvector storage, the `match_document_chunks` function and retrieval are still written directly and do not use LlamaIndex, and the stored chunk format is unchanged. If LlamaIndex fails for a file, the original parser + chunker run instead (`INGESTION_PIPELINE=legacy` forces the old path). Why: maintained readers and splitters instead of our own; nothing else was moved so retrieval behavior stays identical
 - **pgvector HNSW**: no training step, online inserts, excellent recall at < 1M chunks
 - **Voyage AI embeddings**: consistently outperforms OpenAI on retrieval benchmarks; swappable via env var
-- **Claude with strict prompt**: system prompt explicitly forbids hallucination and instructs the model to punt to HR/IT when context is insufficient
+- **Groq LLM behind a small provider layer**: `app/services/llm.py` keeps one `generate_answer()` signature; Groq is the default (free tier, official SDK) and Anthropic stays as an optional path. Rate limits are retried with exponential backoff (honoring `Retry-After`), then the user gets a clear 429/503 message
+- **Strict prompt**: the system prompt explicitly forbids hallucination and instructs the model to punt to HR/IT when context is insufficient
 - **Multi-tenant from day 1**: every table scoped by `org_id`; RLS enforced; service-role key used only server-side
 
 ---
@@ -296,6 +359,47 @@ python -m evaluation.run_ragas
 ## Slack Setup
 
 See [`docs/slack_setup.md`](docs/slack_setup.md) for the full Slack app configuration guide.
+
+---
+
+## MCP Server (Model Context Protocol)
+
+The backend includes a separate, read-only MCP server (`backend/app/mcp_server.py`) that exposes your organization's knowledge base as tools to MCP-compatible clients (such as Claude Desktop or Cursor):
+
+- `search_knowledge_base(query)` — runs vector similarity search via the existing retrieval pipeline and returns matching passages with source metadata.
+- `list_sources()` — lists all `ready` documents in the organization's knowledge base.
+
+### Tenancy & Security
+
+- The MCP server is pinned to a single organization via the `MCP_ORG_ID` environment variable; tool arguments cannot override `org_id` or query across tenants.
+- `SUPABASE_SERVICE_ROLE_KEY` and API keys stay in the local server environment and are never returned in tool outputs.
+
+### Running the MCP Server
+
+```bash
+cd backend
+MCP_ORG_ID=<your-org-uuid> python -m app.mcp_server
+```
+
+### Connecting an MCP Client (e.g., Claude Desktop)
+
+Add an entry to your client's `claude_desktop_config.json` (or `.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "company-knowledge-assistant": {
+      "command": "/absolute/path/to/backend/.venv/bin/python",
+      "args": ["-m", "app.mcp_server"],
+      "cwd": "/absolute/path/to/backend",
+      "env": {
+        "MCP_ORG_ID": "your-org-uuid-here"
+      }
+    }
+  }
+}
+```
+(When `cwd` is `backend/`, `app.core.config` automatically loads the remaining keys from `backend/.env`.)
 
 ---
 
