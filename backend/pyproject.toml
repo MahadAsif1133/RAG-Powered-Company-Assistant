@@ -40,6 +40,9 @@ dependencies = [
 
     # Slack
     "slack-bolt>=1.19.0",
+
+    # MCP server (separate entry point: python -m app.mcp_server)
+    "mcp>=1.2.0",
 ]
 
 [project.optional-dependencies]

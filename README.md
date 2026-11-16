@@ -201,6 +201,7 @@ Frontend will be available at `http://localhost:3000`
 | `CACHE_TTL_SECONDS` | ❌ | Redis query cache TTL in seconds (default `3600`) |
 | `MAX_RETRIEVED_CHUNKS` | ❌ | Defaults to `5` |
 | `CORS_ORIGINS` | ❌ | Comma-separated allowed origins |
+| `MCP_ORG_ID` | ❌ | Organization UUID when running the standalone MCP server (`python -m app.mcp_server`) |
 
 *One of `VOYAGE_API_KEY` or `OPENAI_API_KEY` is required.
 
@@ -324,6 +325,47 @@ python -m evaluation.run_ragas
 ## Slack Setup
 
 See [`docs/slack_setup.md`](docs/slack_setup.md) for the full Slack app configuration guide.
+
+---
+
+## MCP Server (Model Context Protocol)
+
+The backend includes a separate, read-only MCP server (`backend/app/mcp_server.py`) that exposes your organization's knowledge base as tools to MCP-compatible clients (such as Claude Desktop or Cursor):
+
+- `search_knowledge_base(query)` — runs vector similarity search via the existing retrieval pipeline and returns matching passages with source metadata.
+- `list_sources()` — lists all `ready` documents in the organization's knowledge base.
+
+### Tenancy & Security
+
+- The MCP server is pinned to a single organization via the `MCP_ORG_ID` environment variable; tool arguments cannot override `org_id` or query across tenants.
+- `SUPABASE_SERVICE_ROLE_KEY` and API keys stay in the local server environment and are never returned in tool outputs.
+
+### Running the MCP Server
+
+```bash
+cd backend
+MCP_ORG_ID=<your-org-uuid> python -m app.mcp_server
+```
+
+### Connecting an MCP Client (e.g., Claude Desktop)
+
+Add an entry to your client's `claude_desktop_config.json` (or `.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "company-knowledge-assistant": {
+      "command": "/absolute/path/to/backend/.venv/bin/python",
+      "args": ["-m", "app.mcp_server"],
+      "cwd": "/absolute/path/to/backend",
+      "env": {
+        "MCP_ORG_ID": "your-org-uuid-here"
+      }
+    }
+  }
+}
+```
+(When `cwd` is `backend/`, `app.core.config` automatically loads the remaining keys from `backend/.env`.)
 
 ---
 
