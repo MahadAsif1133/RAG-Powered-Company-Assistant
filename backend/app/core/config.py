@@ -19,9 +19,12 @@ class Settings(BaseSettings):
     supabase_anon_key: str = ""
 
     # ── Embeddings ──────────────────────────────────────────────
+    hf_token: str = ""
+    hf_embedding_model: str = "Qwen/Qwen3-Embedding-8B"
+    hf_embedding_provider: str = "deepinfra"
     voyage_api_key: str = ""
     openai_api_key: str = ""
-    embedding_dimension: int = 1024  # 1024 for Voyage, 1536 for OpenAI
+    embedding_dimension: int = 1024  # 1024 for Qwen (MRL) / Voyage, 1536 for OpenAI
 
     # ── Groq (LLM for answer generation) ──────────────────────
     groq_api_key: str = ""
@@ -63,12 +66,16 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",")]
 
     @property
+    def use_qwen(self) -> bool:
+        return bool(self.hf_token)
+
+    @property
     def use_voyage(self) -> bool:
-        return bool(self.voyage_api_key)
+        return bool(self.voyage_api_key) and not self.use_qwen
 
     @property
     def use_openai(self) -> bool:
-        return bool(self.openai_api_key) and not self.use_voyage
+        return bool(self.openai_api_key) and not self.use_qwen and not self.use_voyage
 
 
 # Singleton — import this everywhere

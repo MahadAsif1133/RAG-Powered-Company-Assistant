@@ -16,6 +16,7 @@ dependencies = [
     # LLM & Embeddings
     "groq>=0.9.0",
     "anthropic>=0.30.0",  # optional LLM_PROVIDER=anthropic path
+    "huggingface_hub>=0.24.0",
     "voyageai>=0.3.0",
     "openai>=1.35.0",       # fallback embedder
 
