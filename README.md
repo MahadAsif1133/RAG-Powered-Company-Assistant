@@ -211,6 +211,26 @@ Frontend will be available at `http://localhost:3000`
 
 ---
 
+## Run with Docker
+
+```bash
+# 1. Create backend/.env from the template and fill in your own values
+cp backend/.env.example backend/.env
+
+# 2. Build and start the backend (http://localhost:8000)
+docker compose up --build -d
+
+# 3. Check it
+curl http://localhost:8000/health
+docker compose ps          # STATUS should become "healthy"
+docker compose logs -f backend
+
+# Stop
+docker compose down
+```
+
+The image (`backend/Dockerfile`) uses a multi-stage build (uv installs from `pyproject.toml`, dependency files copied first for layer caching), runs as a non-root user, installs only the system packages the document parsers need, has a `HEALTHCHECK` on `/health`, and honors the `PORT` variable (Railway sets it; default 8000). `docker compose config` works even before `backend/.env` exists, but the app needs real keys to answer questions.
+
 ## Deployment
 
 ### Backend → Railway
