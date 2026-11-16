@@ -12,7 +12,7 @@ from slowapi.util import get_remote_address
 from app.api.deps import UserDep
 from app.core.config import settings
 from app.core.supabase_client import get_supabase
-from app.services.llm import generate_answer
+from app.services.llm import LLMRateLimitError, LLMUnavailableError, generate_answer
 from app.services.retriever import retrieve_chunks
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ async def query(
     RAG query pipeline:
     1. Embed the question
     2. Vector similarity search (top-k chunks for this org)
-    3. Build Claude prompt with retrieved context
+    3. Build LLM prompt with retrieved context
     4. Generate answer (grounded, citation-aware)
     5. Log to query_logs
     6. Return answer + source documents
@@ -86,7 +86,12 @@ async def query(
     chunks = retrieve_chunks(question=question, org_id=current_user.org_id)
 
     # Step 3 & 4: Generate answer
-    answer, was_confident = generate_answer(question=question, chunks=chunks)
+    try:
+        answer, was_confident = generate_answer(question=question, chunks=chunks)
+    except LLMRateLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
+    except LLMUnavailableError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
     latency_ms = int(time.time() * 1000) - start_ms
 

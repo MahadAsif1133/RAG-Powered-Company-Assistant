@@ -14,7 +14,8 @@ dependencies = [
     "gotrue>=2.5.0",
 
     # LLM & Embeddings
-    "anthropic>=0.30.0",
+    "groq>=0.9.0",
+    "anthropic>=0.30.0",  # optional LLM_PROVIDER=anthropic path
     "voyageai>=0.3.0",
     "openai>=1.35.0",       # fallback embedder
 
@@ -60,3 +61,7 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 ignore = ["E501"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

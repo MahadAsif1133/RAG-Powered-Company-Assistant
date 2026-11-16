@@ -86,7 +86,7 @@
 | Database | Supabase (Postgres 15 + pgvector) |
 | Auth | Supabase Auth (email/password) |
 | Embeddings | Voyage AI `voyage-3-large` (1024-dim) |
-| LLM | Anthropic Claude (claude-sonnet-4-5) |
+| LLM | Groq (official `groq` SDK; model set via `GROQ_MODEL`), optional Anthropic path via `LLM_PROVIDER=anthropic` |
 | Document Parsing | `unstructured` + `pypdf` + `python-docx` |
 | Frontend | Next.js 14 (App Router), TypeScript, Tailwind CSS |
 | Charts | recharts |
@@ -102,7 +102,7 @@
 - Node.js 18+
 - A [Supabase](https://supabase.com) project (free tier works)
 - A [Voyage AI](https://www.voyageai.com) API key **or** OpenAI API key
-- An [Anthropic](https://console.anthropic.com) API key
+- A [Groq](https://console.groq.com) API key (free tier works; check Groq's current model list for `GROQ_MODEL`)
 - A [Slack App](https://api.slack.com/apps) (for Milestone 5 only)
 
 ---
@@ -185,8 +185,12 @@ Frontend will be available at `http://localhost:3000`
 | `SUPABASE_ANON_KEY` | ✅ | Public anon key |
 | `VOYAGE_API_KEY` | ✅* | Voyage AI key for embeddings |
 | `OPENAI_API_KEY` | ✅* | OpenAI key (fallback if no Voyage key) |
-| `ANTHROPIC_API_KEY` | ✅ | Anthropic Claude key |
-| `CLAUDE_MODEL` | ❌ | Defaults to `claude-sonnet-4-5` |
+| `LLM_PROVIDER` | ❌ | `groq` (default) or `anthropic` |
+| `GROQ_API_KEY` | ✅ | Groq API key |
+| `GROQ_MODEL` | ✅ | Groq model name — no default in code; pick one from [Groq's current model list](https://console.groq.com/docs/models) |
+| `LLM_MAX_RETRIES` | ❌ | Retries with backoff on Groq rate limits (default `3`) |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | ❌ | Only if `LLM_PROVIDER=anthropic` |
+| `SIMILARITY_THRESHOLD` | ❌ | Minimum cosine similarity for retrieval (default `0.3`) |
 | `EMBEDDING_DIMENSION` | ❌ | `1024` (Voyage) or `1536` (OpenAI) |
 | `SLACK_BOT_TOKEN` | ❌ | Required for Slack bot only |
 | `SLACK_SIGNING_SECRET` | ❌ | Required for Slack bot only |
@@ -288,7 +292,8 @@ python -m evaluation.run_ragas
 - **No LangChain/LlamaIndex**: chunking, embedding, and retrieval are written directly for debuggability and easy client demos
 - **pgvector HNSW**: no training step, online inserts, excellent recall at < 1M chunks
 - **Voyage AI embeddings**: consistently outperforms OpenAI on retrieval benchmarks; swappable via env var
-- **Claude with strict prompt**: system prompt explicitly forbids hallucination and instructs the model to punt to HR/IT when context is insufficient
+- **Groq LLM behind a small provider layer**: `app/services/llm.py` keeps one `generate_answer()` signature; Groq is the default (free tier, official SDK) and Anthropic stays as an optional path. Rate limits are retried with exponential backoff (honoring `Retry-After`), then the user gets a clear 429/503 message
+- **Strict prompt**: the system prompt explicitly forbids hallucination and instructs the model to punt to HR/IT when context is insufficient
 - **Multi-tenant from day 1**: every table scoped by `org_id`; RLS enforced; service-role key used only server-side
 
 ---

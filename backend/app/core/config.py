@@ -25,7 +25,14 @@ class Settings(BaseSettings):
 
     # ── Groq (LLM for answer generation) ──────────────────────
     groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
+    # No model name is hardcoded: set GROQ_MODEL (check console.groq.com/docs/models)
+    groq_model: str = ""
+    llm_max_retries: int = 3  # retries on rate limit / transient errors, with backoff
+
+    # ── LLM provider switch ─────────────────────────────────────
+    llm_provider: str = "groq"  # "groq" (default) or "anthropic" (optional path)
+    anthropic_api_key: str = ""
+    anthropic_model: str = ""  # only used when LLM_PROVIDER=anthropic
 
     # ── Rate Limiting ───────────────────────────────────────────
     query_rate_limit: str = "10/minute"
